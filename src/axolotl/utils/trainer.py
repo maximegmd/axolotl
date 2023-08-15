@@ -360,6 +360,7 @@ def setup_fsdp_envs(cfg):
     if cfg.fsdp_config.fsdp_state_dict_type:
         os.environ["FSDP_STATE_DICT_TYPE"] = cfg.fsdp_config.fsdp_state_dict_type
     from axolotl.monkeypatch.fsdp import replace_fsdp_state_dict_type
+
     replace_fsdp_state_dict_type()
 
 
