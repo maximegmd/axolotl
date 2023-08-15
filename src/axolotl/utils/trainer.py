@@ -359,6 +359,8 @@ def setup_fsdp_envs(cfg):
         os.environ["FSDP_SYNC_MODULE_STATES"] = "true"
     if cfg.fsdp_config.fsdp_state_dict_type:
         os.environ["FSDP_STATE_DICT_TYPE"] = cfg.fsdp_config.fsdp_state_dict_type
+    from axolotl.monkeypatch.fsdp import replace_fsdp_state_dict_type
+    replace_fsdp_state_dict_type()
 
 
 def setup_trainer(cfg, train_dataset, eval_dataset, model, tokenizer, total_num_steps):
