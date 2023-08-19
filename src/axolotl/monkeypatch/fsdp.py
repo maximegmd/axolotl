@@ -1,3 +1,7 @@
+"""
+Monkeypatch to fix fsdp set state when no previous state was set
+"""
+
 import contextlib
 from typing import Generator, Optional
 
@@ -13,7 +17,7 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataP
 
 @staticmethod
 @contextlib.contextmanager
-def state_dict_type(
+def state_dict_type_patch(
     module: nn.Module,
     state_dict_type: StateDictType,
     state_dict_config: Optional[StateDictConfig] = None,
@@ -37,5 +41,5 @@ def state_dict_type(
 
 def replace_fsdp_state_dict_type():
     torch.distributed.fsdp.fully_sharded_data_parallel.FullyShardedDataParallel.state_dict_type = (
-        state_dict_type
+        state_dict_type_patch
     )
