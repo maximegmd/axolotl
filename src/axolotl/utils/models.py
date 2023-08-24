@@ -442,7 +442,7 @@ def load_lora(model, cfg):
         if isinstance(module, LoraLayer) and not cfg.gptq:
             module = module.to(cfg.torch_dtype)
         # TODO make sure we cast LlamaRMSNorm layer to float32 for non-loras
-        if "norm" in name:
+        if "norm" in name and not cfg.gptq:
             module = module.to(torch.float32)
         if "lm_head" in name or "embed_tokens" in name:
             if hasattr(module, "weight"):
