@@ -46,6 +46,16 @@ def load_tokenizer(cfg):
     if cfg.tokenizer_type:
         tokenizer_cls = getattr(transformers, cfg.tokenizer_type)
 
+    if (
+        tokenizer_cls.__name__
+        in [
+            "LlamaTokenizer",
+            "LlamaTokenizerFast",
+        ]
+    ):
+        # set a pad_token, but use eos_token so we don't add a new token
+        tokenizer_kwargs["pad_token"] = LLAMA_DEFAULT_EOS_TOKEN
+    
     tokenizer_config = cfg.tokenizer_config or cfg.base_model_config
     tokenizer = tokenizer_cls.from_pretrained(
         tokenizer_config,
@@ -53,18 +63,6 @@ def load_tokenizer(cfg):
         use_fast=use_fast,
         **tokenizer_kwargs,
     )
-
-    if (
-        tokenizer.__class__.__name__
-        in [
-            "LlamaTokenizer",
-            "LlamaTokenizerFast",
-        ]
-        and hasattr(tokenizer, "pad_token")
-        and not tokenizer.pad_token
-    ):
-        # set a pad_token, but use eos_token so we don't add a new token
-        tokenizer.pad_token = LLAMA_DEFAULT_EOS_TOKEN
 
     LOG.debug(f"EOS: {tokenizer.eos_token_id} / {tokenizer.eos_token}")
     LOG.debug(f"BOS: {tokenizer.bos_token_id} / {tokenizer.bos_token}")
