@@ -5,8 +5,12 @@ from functools import wraps
 from typing import Any, Dict, Union
 
 import torch
+import math
+import os
 from torch import nn
 from trl import DPOTrainer
+from typing_extensions import override
+
 
 from axolotl.core.trainers.mixins import (
     DistributedParallelMixin,
@@ -18,7 +22,12 @@ from axolotl.core.trainers.utils import (
     sanitize_kwargs_for_ds_tagging,
     sanitize_kwargs_for_tagging,
 )
-
+from axolotl.utils import get_not_null
+from axolotl.utils.bench import get_gpu_memory_usage
+from axolotl.utils.dict import DictDefault
+from axolotl.utils.distributed import is_distributed, is_main_process
+from axolotl.utils.logging import get_logger
+from axolotl.utils.samplers import MultipackBatchSampler, get_dataset_lengths
 
 class AxolotlDPOTrainer(
     RngLoaderMixin,
@@ -38,6 +47,89 @@ class AxolotlDPOTrainer(
         self.dataset_tags = dataset_tags
         self.optimizer = None
         self.model_accepts_loss_kwargs = False
+
+
+    @override
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
+        # track number of tokens for tokens per second calculation
+        if self.args.include_tkps and model.training:
+            chosen_inputs_key = "labels" if "labels" in inputs else "chosen_input_ids"
+            rejected_inputs_key = "labels" if "labels" in inputs else "rejected_input_ids"
+            trainable_tokens = (inputs[chosen_inputs_key] != -100).sum() + (inputs[rejected_inputs_key] != -100).sum()
+            total_tokens = inputs["prompt_input_ids"].numel() + trainable_tokens
+            total_tokens = torch.tensor(total_tokens, device=inputs[chosen_inputs_key].device)
+
+            if is_distributed():
+                torch.distributed.all_reduce(
+                    trainable_tokens, op=torch.distributed.ReduceOp.SUM
+                )
+                torch.distributed.all_reduce(
+                    total_tokens, op=torch.distributed.ReduceOp.SUM
+                )
+
+            if not hasattr(self.state, "tokens"):
+                self.state.tokens = {
+                    "trainable": torch.zeros(1),
+                    "total": torch.zeros(1),
+                }
+
+            # trainable tokens for throughput and total token slots for summaries
+            self.state.tokens["trainable"] = (
+                self.state.tokens["trainable"] + trainable_tokens.detach().cpu()
+            )
+            self.state.tokens["total"] = self.state.tokens["total"] + total_tokens.cpu()
+            # Store per-step trainable tokens for throughput calculation
+            self.state.tokens["trainable_tokens"] = trainable_tokens.detach().cpu()
+
+        return super().compute_loss(
+            model,
+            inputs,
+            return_outputs=return_outputs,
+            num_items_in_batch=num_items_in_batch,
+        )
+    
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        """
+        Log `logs` on the various objects watching training, including stored metrics.
+
+        Args:
+            logs: The values to log.
+            start_time: The start of training.
+        """
+        # logs either has 'loss' or 'eval_loss'
+        train_eval = "train" if "loss" in logs else "eval"
+        metric_ndigits = int(os.getenv("AXOLOTL_METRIC_NDIGITS", "5"))
+
+        if "loss" in logs:
+            try:
+                logs["ppl"] = round(math.exp(logs["loss"]), metric_ndigits)
+            except OverflowError:
+                logs["ppl"] = float("inf")
+        if "eval_loss" in logs:
+            try:
+                logs["eval_ppl"] = round(math.exp(logs["eval_loss"]), metric_ndigits)
+            except OverflowError:
+                logs["eval_ppl"] = float("inf")
+
+        if is_main_process():
+            # Add memory usage
+            try:
+                active, allocated, reserved = get_gpu_memory_usage()
+                logs["memory/max_active (GiB)"] = round(active, 2)
+                logs["memory/max_allocated (GiB)"] = round(allocated, 2)
+                logs["memory/device_reserved (GiB)"] = round(reserved, 2)
+            except (ValueError, TypeError, FileNotFoundError):
+                pass
+
+        logs["tokens/train_per_sec_per_gpu"] = round(
+            self.state.last_tokens_per_second.item() / self.args.logging_steps, 2
+        )
+
+        del self._stored_metrics[train_eval]
+
+        return super().log(logs, start_time)
 
     @wraps(DPOTrainer.push_to_hub)
     def push_to_hub(self, *args, **kwargs) -> str:

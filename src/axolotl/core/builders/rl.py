@@ -18,6 +18,8 @@ from axolotl.utils.callbacks.qat import QATCallback
 from axolotl.utils.import_helper import get_cls_from_module_str
 from axolotl.utils.logging import get_logger
 from axolotl.utils.schemas.enums import RLType
+from axolotl.utils.callbacks.tokens_per_second import TokensPerSecondCallback
+
 
 LOG = get_logger(__name__)
 
@@ -30,6 +32,15 @@ class HFRLTrainerBuilder(TrainerBuilderBase):
 
         if self.cfg.qat:
             callbacks.append(QATCallback(self.cfg.qat))
+
+        if self.cfg.include_tkps:
+            callbacks.append(
+                TokensPerSecondCallback(
+                    self.cfg.tensor_parallel_size,
+                    self.cfg.context_parallel_size,
+                    resume_from_checkpoint=self.cfg.resume_from_checkpoint,
+                )
+            )
 
         return callbacks
 
